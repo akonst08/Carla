@@ -3,6 +3,7 @@ import os
 import shutil
 import carla
 
+# Parse command-line arguments for camera FOV, capture duration, and spawn point
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--fov", type=float, default=90.0, help="Horizontal camera FOV in degrees")
@@ -10,20 +11,25 @@ def parse_args():
     parser.add_argument("--cam-index", type=int, default=0, help="Spawn point index for static camera position")
     return parser.parse_args()
 
-# Output directories
+# Output directories for images, labels, videos, and annotations
 OUT_ROOT = "out"
 IMG_DIR = os.path.join(OUT_ROOT, "images")
+IMG_RGB_DIR = os.path.join(IMG_DIR, "rgb")
+IMG_SEG_DIR = os.path.join(IMG_DIR, "seg")
+IMG_BOXED_DIR = os.path.join(IMG_DIR, "boxed")
+IMG_DETMASK_DIR = os.path.join(IMG_DIR, "detmask")
 YOLO_DIR = os.path.join(OUT_ROOT, "labels_yolo")
 VID_DIR = os.path.join(OUT_ROOT, "videos")
 VOC_DIR = os.path.join(OUT_ROOT, "annotations_voc")
 
+# Clean and recreate output directories
 def setup_output_dirs():
-    for d in [IMG_DIR, YOLO_DIR, VID_DIR, VOC_DIR]:
+    for d in [IMG_DIR, IMG_RGB_DIR, IMG_SEG_DIR, IMG_BOXED_DIR, IMG_DETMASK_DIR, YOLO_DIR, VID_DIR, VOC_DIR]:
         if os.path.exists(d):
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-# Weather presets
+# Weather presets for diverse data collection
 weather_presets = [
     carla.WeatherParameters.Default,
     carla.WeatherParameters.ClearNoon,
@@ -50,7 +56,7 @@ weather_presets = [
     carla.WeatherParameters.DustStorm
 ]
 
-# Class mappings
+# Semantic segmentation BGR colors for each object class
 SEG_COLORS = {
     12: [(60,20,220)],
     13: [(0,0,255)],
@@ -62,6 +68,7 @@ SEG_COLORS = {
     19: [(32,11,119)]
 }
 
+# Class ID to human-readable name mapping
 CLASS_NAMES = {
     12: "pedestrian",
     13: "rider",
