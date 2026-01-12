@@ -249,12 +249,39 @@ try:
         if is_export_frame:
             frame_id = f"{frame_count:06d}"
             img_bgr = img[:, :, :3]
-            
-            # Save RGB image to disk
-            img_path = os.path.join(bbox_config.IMG_DIR, f"frame_{frame_id}.png")
+            seg_bgr = seg_img[:, :, :3]
+
+            # 1) Export Save RGB image to disk
+            img_path = os.path.join(bbox_config.IMG_RGB_DIR, f"frame_{frame_id}.png")
             cv2.imwrite(img_path, img_bgr)
-            
-            # Export bounding box annotations in Pascal VOC XML format
+
+            # 2) Export RGB frame WITH bounding boxes (BOXED IMAGE)
+            boxed_path = os.path.join(bbox_config.IMG_BOXED_DIR, f"frame_{frame_id}_boxed.png")
+            overlay = img_bgr.copy()
+            for (x1, y1, x2, y2, cid) in boxes_xyxy_cls:
+                # Green for vehicles/riders/etc, blue for others
+                color = (0, 255, 0) if cid in [13,14,15,16,17,18,19] else (255, 0, 0)
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 1)
+            cv2.imwrite(boxed_path, overlay)
+
+            # 3) Export segmentation mask
+            seg_path = os.path.join(bbox_config.IMG_SEG_DIR, f"frame_{frame_id}_seg.png")
+            cv2.imwrite(seg_path, seg_bgr)
+
+            # 4) Export detection mask (binary mask)
+            H, W = seg_img.shape[:2]
+            det_mask = np.zeros((H, W), dtype=np.uint8)
+
+            # Classes I want to detect
+            target_ids = [13,14,15,16,17,18,19]  # rider, car, truck, bus, train, motorcycle, bicycle
+
+            for cid in target_ids:
+                color = bbox_config.SEG_COLORS[cid][0]
+                det_mask |= (np.all(seg_bgr == color, axis=-1).astype(np.uint8) * 255)
+            det_path = os.path.join(bbox_config.IMG_DETMASK_DIR, f"frame_{frame_id}_detmask.png")
+            cv2.imwrite(det_path, det_mask)
+
+            # 5) Export bounding box annotations in Pascal VOC XML format
             voc_path = os.path.join(bbox_config.VOC_DIR, f"frame_{frame_id}.xml")
             bbox_labels.write_voc_xml(voc_path, boxes_xyxy_cls, image_w, image_h, img_path, bbox_config.CLASS_NAMES)
             
