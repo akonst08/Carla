@@ -1,3 +1,4 @@
+import sys
 import carla
 import random
 import time
@@ -17,8 +18,7 @@ import bbox_detection
 import bbox_labels
 
 #  INITIALIZATION 
-# Parse command-line arguments (FOV, duration, camera spawn index)
-args = bbox_config.parse_args()
+cfg = bbox_config.load_config("config.yaml")
 # Create fresh output directories for images, labels, and videos
 bbox_config.setup_output_dirs()
 
@@ -30,30 +30,34 @@ pygame.init()
 client = bbox_carla.connect_client()
 world = client.get_world()
 # Set initial weather conditions
-world.set_weather(carla.WeatherParameters.ClearNoon)
+weather_name = cfg["carla"]["weather"]
+world.set_weather(getattr(carla.WeatherParameters, weather_name))
 # Clean up any actors from previous runs
 bbox_carla.destroy_leftovers(world, client)
 # Enable synchronous mode for deterministic simulation (20 FPS = 0.05s per tick)
-bbox_carla.setup_synchronous_mode(world, fixed_delta_seconds=0.05)
+bbox_carla.setup_synchronous_mode(world, fixed_delta_seconds=cfg["carla"]["fixed_delta_seconds"])
 
 #  CAMERA SPAWNING 
 # Get blueprint library and available spawn points from the map
 bp_lib = world.get_blueprint_library()
 spawn_points = world.get_map().get_spawn_points()
 
-# Validate the requested camera spawn index
-if args.cam_index >= len(spawn_points):
-    raise ValueError(f"--cam-index {args.cam_index} out of range (map has {len(spawn_points)} spawn points)")
-
 # Position camera at specified spawn point but elevated (z=60) with top-down view (pitch=-90)
-base_sp = spawn_points[args.cam_index]
-cam_trans = carla.Transform(carla.Location(x=base_sp.location.x, y=base_sp.location.y, z=60.0),
-                             carla.Rotation(pitch=-90.0, yaw=0.0, roll=0.0))
+cam_index = cfg["run"]["cam_index"]
+
+if cam_index >= len(spawn_points):
+    raise ValueError(f"cam_index {cam_index} out of range (map has {len(spawn_points)} spawn points)")
+
+base_sp = spawn_points[cam_index]
+
+cam_trans = carla.Transform(carla.Location(x=base_sp.location.x, y=base_sp.location.y, z=cfg["camera"]["z"]),
+                             carla.Rotation(pitch=cfg["camera"]["pitch"], yaw=0.0, roll=0.0))
 
 # Create RGB and semantic segmentation cameras with specified resolution and FOV
-image_w, image_h = 1280, 720
+image_w = cfg['camera']['width']
+image_h = cfg['camera']['height']
 camera, segmentation_cam, camera_data, segmentation_data, camera_bp, semantic_bp = bbox_camera.create_cameras(
-    world, bp_lib, cam_trans, args.fov, image_w, image_h
+    world, bp_lib, cam_trans, cfg["camera"]["fov"], image_w, image_h
 )
 
 # Create Pygame window for live visualization
@@ -73,12 +77,12 @@ segmentation_writer = None
 
 #  PROJECTION MATRIX 
 # Build camera intrinsic matrix for 3D to 2D projection
-K = bbox_detection.build_projection_matrix(image_w, image_h, args.fov)
+K = bbox_detection.build_projection_matrix(image_w, image_h, cfg["camera"]["fov"])
 
 #  TRAFFIC SPAWNING 
 # Spawn vehicles with autopilot for dynamic scene
 vehicle_bps = bp_lib.filter('*vehicle*')
-for _ in range(10):
+for _ in range(cfg["traffic"]["vehicles"]):
     sp = random.choice(world.get_map().get_spawn_points())
     vbp = random.choice(vehicle_bps)
     spawned_vehicle = world.try_spawn_actor(vbp, sp)
@@ -87,16 +91,18 @@ for _ in range(10):
 
 # Spawn pedestrian walkers with AI controllers for realistic movement
 walker_bps = bp_lib.filter('*walker*')
-for _ in range(3):
+for _ in range(cfg["traffic"]["walkers"]):
     sp = carla.Transform()
     sp.location = world.get_random_location_from_navigation()
     if sp.location:
         wbp = random.choice(walker_bps)
         walker = world.try_spawn_actor(wbp, sp)
         if walker:
+            world.tick() 
             # Attach AI controller to make the walker move autonomously
             ctrl_bp = bp_lib.find('controller.ai.walker')
             ctrl = world.spawn_actor(ctrl_bp, carla.Transform(), attach_to=walker)
+            world.tick()
             ctrl.start()
             ctrl.go_to_location(world.get_random_location_from_navigation())
             ctrl.set_max_speed(1 + random.random())
@@ -111,19 +117,19 @@ if dummy_vehicle:
 
 #  PERFORMANCE & EXPORT SETTINGS 
 # Process detection every N frames to reduce computational load
-PROCESS_INTERVAL = 2
+PROCESS_INTERVAL = cfg["processing"]["process_interval"]
 # Enable detection of static vehicles from segmentation masks
-ENABLE_STATIC_DETECTION = True
+ENABLE_STATIC_DETECTION = cfg["processing"]["enable_static_detection"]
 # Enable exporting annotated frames to disk
-ENABLE_EXPORTS = True
+ENABLE_EXPORTS = cfg["export"]["enable"]
 # Export every Nth frame within the export window
-EXPORT_INTERVAL = 10
+EXPORT_INTERVAL = cfg["export"]["export_interval"]
 # Start exporting after initial frames to allow scene stabilization
-EXPORT_START_FRAME = 50
+EXPORT_START_FRAME = cfg["export"]["export_start_frame"]
 # Stop exporting before simulation ends (95% of total frames)
-EXPORT_END_PERCENT = 0.95
+EXPORT_END_PERCENT = cfg["export"]["export_end_percent"]
 # Maximum number of frames to export
-MAX_EXPORTS = 100
+MAX_EXPORTS = cfg["export"]["max_exports"]
 
 
 #  STATE TRACKING VARIABLES 
@@ -149,35 +155,22 @@ try:
     #  MAIN SIMULATION LOOP 
     while True:
         # Calculate target frame count based on requested duration
-        target_frames = int(args.duration / world.get_settings().fixed_delta_seconds)
+        duration = cfg["run"]["duration"]
+        target_frames = int(duration / world.get_settings().fixed_delta_seconds)
         EXPORT_END_FRAME = int(target_frames * EXPORT_END_PERCENT)
         
         # Check if simulation duration has been reached
         if frame_count >= target_frames:
-            print(f"Finished {args.duration}s capture ({frame_count} frames, {export_count} exported).")
+            print(f"Finished {duration}s capture ({frame_count} frames, {export_count} exported).")
             break
         
         # Advance simulation by one tick
         world.tick()
         
-        #  CAMERA FRAME SYNCHRONIZATION 
-        # Wait for both cameras to deliver frames for the current simulation tick
-        max_wait = 50
-        synced = False
-        for wait_iter in range(max_wait):
-            if (camera_data['frame'] >= frame_count and segmentation_data['frame'] >= frame_count):
-                synced = True
-                break
-            time.sleep(0.001)
-        
-        # Skip frame if synchronization failed
-        if not synced:
-            timeout_count += 1
-            if timeout_count % 10 == 0:
-                print(f"[WARN] Frame sync timeout #{timeout_count} at frame {frame_count}")
+        if camera_data['frame'] < frame_count or segmentation_data['frame'] < frame_count:
             frame_count += 1
             continue
-        
+
         # Retrieve synchronized images from both cameras
         img = camera_data['image']
         seg_img = segmentation_data['image']
@@ -195,7 +188,7 @@ try:
         except AttributeError:
             w2c = np.linalg.inv(np.array(cam_tf.get_matrix(), dtype=float))
 
-        t_start = time_module.perf_counter()
+       
 
         #  DYNAMIC VEHICLE DETECTION 
         # Project 3D bounding boxes of all vehicles onto 2D image plane
@@ -221,7 +214,6 @@ try:
                           frame_count % EXPORT_INTERVAL == 0 and
                           export_count < MAX_EXPORTS)
         
-        t_projection = time_module.perf_counter()
 
         #  FILTERING & STATIC DETECTION 
         # Only reprocess detection if interval reached or exporting this frame
@@ -231,13 +223,11 @@ try:
             # Filter boxes using segmentation to remove false positives (background regions)
             cached_filtered = bbox_detection.filter_boxes_segmentation(boxes_xyxy_cls, seg_img)
             last_filter_frame = frame_count
-            t_filter = time_module.perf_counter()
             if ENABLE_STATIC_DETECTION:
                 # Detect static vehicles from segmentation that aren't already tracked
                 seg_bgr = seg_img[:, :, :3]
                 cached_static = bbox_detection.detect_static_vehicles(seg_bgr, cached_filtered, bbox_config.SEG_COLORS)
                 last_static_frame = frame_count
-                t_static = time_module.perf_counter()
             else:
                 cached_static = []
 
@@ -291,7 +281,7 @@ try:
         frame_id = f"{frame_count:06d}"
         img_bgr = img[:, :, :3]
         
-        # Optional: Write raw video (currently disabled)
+        
         #raw_writer.write(img_bgr)
         
         #  VIDEO ANNOTATION 
@@ -306,8 +296,6 @@ try:
         seg_bgr = seg_img[:, :, :3]
         # Optional: Write segmentation video (currently disabled)
         #segmentation_writer.write(seg_bgr)
-        
-        t_video = time_module.perf_counter()
 
         #  PYGAME VISUALIZATION 
         # Display current frame in Pygame window
@@ -315,8 +303,7 @@ try:
         surf = pygame.surfarray.make_surface(rgb.swapaxes(0, 1))
         screen.blit(surf, (0, 0))
         pygame.display.flip()
-        t_display = time_module.perf_counter()
-
+    
         #  PERFORMANCE REPORTING 
         # Periodically report FPS and statistics
         if frame_count - last_fps_report >= 100:
@@ -324,17 +311,6 @@ try:
             current_fps = frame_count / elapsed if elapsed > 0 else 0
             print(f"[FPS] Frame {frame_count}: {current_fps:.1f} FPS | Timeouts: {timeout_count} | Boxes: {len(boxes_xyxy_cls)}")
             last_fps_report = frame_count
-
-        # Detailed timing breakdown every 100 frames
-        # Detailed timing breakdown every 100 frames
-        if frame_count % 100 == 0:
-            print(f"Timing breakdown (ms):")
-            print(f"  Projection: {(t_projection - t_start)*1000:.1f}")
-            print(f"  Filtering:  {(t_filter - t_projection)*1000:.1f}")
-            print(f"  Static:     {(t_static - t_filter)*1000:.1f}")
-            print(f"  Video:      {(t_video - t_static)*1000:.1f}")
-            print(f"  Display:    {(t_display - t_video)*1000:.1f}")
-            print(f"  TOTAL:      {(t_display - t_start)*1000:.1f}")
 
         #  USER INPUT HANDLING 
         # Check for quit events
@@ -391,12 +367,12 @@ try:
             # Create new cameras at random location
             new_sp = random.choice(spawn_points)
             new_cam_trans = carla.Transform(
-                carla.Location(x=new_sp.location.x, y=new_sp.location.y, z=60.0),
-                carla.Rotation(pitch=-90.0, yaw=0.0, roll=0.0)
+                carla.Location(x=new_sp.location.x, y=new_sp.location.y, z=cfg["camera"]["z"]),
+                carla.Rotation(pitch=cfg["camera"]["pitch"], yaw=0.0, roll=0.0)
             )
 
             camera, segmentation_cam, camera_data, segmentation_data, _, _ = bbox_camera.create_cameras(
-                world, bp_lib, new_cam_trans, args.fov, image_w, image_h
+                world, bp_lib, new_cam_trans, cfg["camera"]["fov"], image_w, image_h
             )
 
             world.tick()
