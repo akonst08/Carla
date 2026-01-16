@@ -122,6 +122,7 @@ EXPORT_END_PERCENT = cfg["export"]["export_end_percent"]
 MAX_EXPORTS = cfg["export"]["max_exports"]
 
 
+
 #  STATE TRACKING VARIABLES 
 # Counter for exported frames
 export_count = 0
@@ -212,7 +213,14 @@ try:
             if mm:
                 x_min, x_max, y_min, y_max = mm
                 boxes_xyxy_cls.append((x_min, y_min, x_max, y_max, cid))
-        
+
+        # REMOVE ghost / occluded bounding boxes using semantic segmentation
+        boxes_xyxy_cls = bbox_detection.filter_boxes_segmentation(
+            boxes_xyxy_cls,
+            seg_img,
+            bg_thr=0.40
+        )
+
         #  EXPORT DECISION 
         # Determine if this frame should be exported based on settings
         is_export_frame = (ENABLE_EXPORTS and 

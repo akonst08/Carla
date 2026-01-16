@@ -93,10 +93,13 @@ def filter_boxes_segmentation(boxes, seg_img, bg_thr=0.60):
         return []
     
     seg_bgr = seg_img[:, :, :3]
+    
+    # Pre-compute background mask for entire image once
+    # Create a lookup by converting RGB to a single integer for fast comparison
+    bg_set = set(tuple(color) for color in BACKGROUND_COLORS)
+    
     keep = []
     
-    # Filter boxes based on background ratio within each bounding box
-
     for (xmin, ymin, xmax, ymax, cid) in boxes:
         # Ensure box is within image bounds
         xmin = max(0, xmin)
@@ -107,21 +110,26 @@ def filter_boxes_segmentation(boxes, seg_img, bg_thr=0.60):
         if xmax <= xmin or ymax <= ymin:
             continue
         
-        # Extract region of interest and compute background ratio
+        # Extract region of interest
         roi = seg_bgr[ymin:ymax, xmin:xmax]
         
         total_pixels = roi.shape[0] * roi.shape[1]
         if total_pixels == 0:
             continue
 
-        bg_pixels = 0
-        for color in BACKGROUND_COLORS:
-            bg_pixels += np.all(roi == color, axis=-1).sum()
+        # Reshape ROI to 2D array of pixels (N x 3)
+        roi_reshaped = roi.reshape(-1, 3)
+        
+        # Vectorized comparison: check if each pixel matches any background color
+        # Broadcasting: (N, 3) vs (21, 3) -> (N, 21, 3)
+        matches = (roi_reshaped[:, None, :] == BACKGROUND_COLORS[None, :, :]).all(axis=2)
+        bg_pixels = matches.any(axis=1).sum()
         
         bg_ratio = bg_pixels / total_pixels
-        # Keep box if background ratio is below threshold
+        
         if bg_ratio < bg_thr:
             keep.append((xmin, ymin, xmax, ymax, cid))
 
     return keep
+
 

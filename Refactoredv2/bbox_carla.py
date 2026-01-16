@@ -2,7 +2,7 @@ import carla
 import time
 
 # Connect to CARLA simulator server
-def connect_client(host="172.21.208.1", port=2000, timeout=10.0):
+def connect_client(host="localhost", port=2000, timeout=10.0):
     client = carla.Client(host, port, worker_threads=4)
     client.set_timeout(timeout)
     return client

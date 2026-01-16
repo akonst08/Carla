@@ -9,12 +9,12 @@ carla:
 camera:
   width: 1280
   height: 720
-  fov: 70
+  fov: 90
   z: 60.0
   pitch: -90.0
 
 run:
-  duration: 10
+  duration: 30
   cam_index: 50
 
 traffic:
@@ -24,6 +24,7 @@ traffic:
 processing:
   process_interval: 2
   enable_static_detection: false
+
 
 export:
   enable: true
